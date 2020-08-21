@@ -55,4 +55,6 @@ Se recibe el response como PKCS7 y se almacena en el keystore el certificado con
 
 - Bouncy Castle Fips verifica internamente si hubo cambios en su jar, entonces la aplicación no iniciará si existe cambios en sus librerías.
 
+- BC y BC Fips no pueden estar dentro del mismo proyecto ya que algunas clases se solapan porque tienen los mismos nombres y por lo tanto la aplicación no funciona.
+
 
