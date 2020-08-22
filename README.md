@@ -38,6 +38,8 @@ Se recibe el response como PKCS7 y se almacena en el keystore el certificado con
 
 - export SERVICE_AUTHORIZATION=
 
+- export ALGORITHM=RSA|EC
+
 - Ejecutar la aplicación
 
 - java -jar target/createkeystorefips-0.0.1-SNAPSHOT.jar
