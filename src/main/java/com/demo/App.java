@@ -16,6 +16,7 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
 import java.security.Security;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
@@ -27,7 +28,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
-import org.bouncycastle.cert.CertIOException;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cms.CMSException;
@@ -41,7 +41,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 
 /**
- * Hello world!
  *
  */
 public class App 
@@ -49,20 +48,25 @@ public class App
 	private static char[] password = null;
 	private static String urlService = null;
 	private static String authorization = null;
+	private static String algorithm = "EC";
+	private static final int RSA_SIZE = 2048;
+	private static final int EC_SIZE = 256;
 	private static String alias;
+	
+	
 	
     public static void main( String[] args )
     {
-		Security.addProvider(new BouncyCastleFipsProvider());
-		cargarVariables();
+		Security.addProvider(new BouncyCastleFipsProvider());		
 		alias = Utils.dateTimeToStr(Utils.getNow());
 		try 
 		{
+			cargarVariables();
 			createKeyStore();
-			Certificado cert = createCertificate();
-			String pkcs10 = createCSR(cert);
+			KeyPair keyPair = createKeyPair();
+			String pkcs10 = createCSR(keyPair);
 			List<X509Certificate> chain = sendApi(pkcs10);
-			saveCertificate(cert, chain);
+			saveCertificate(keyPair.getPrivate(), chain);
 		} 
 		catch (IOException | OperatorCreationException | GeneralSecurityException | CMSException e) {
 			e.printStackTrace();
@@ -71,7 +75,7 @@ public class App
     /**
      * 
      */
-    public static void cargarVariables()
+    public static void cargarVariables() throws NoSuchAlgorithmException
     {
     	Map<String, String> env = System.getenv();
     	for (String envName : env.keySet()) 
@@ -83,8 +87,13 @@ public class App
     		if ("SERVICE_URL".equals(envName)) {
     			urlService = env.get(envName);
     		}
+    		else
     		if ("SERVICE_AUTHORIZATION".equals(envName)) {
     			authorization = env.get(envName);
+    		}
+    		else
+    		if ("ALGORITHM".equals(envName)) {
+    			algorithm = env.get(envName);
     		}
     	}
     	if (password == null) {
@@ -95,6 +104,9 @@ public class App
     	}
     	if (authorization == null) {
     		throw new RuntimeException("Falta la variable SERVICE_AUTHORIZATION");
+    	}
+    	if (!("RSA".equals(algorithm) || "EC".equals(algorithm))) {
+    		throw new NoSuchAlgorithmException(algorithm);
     	}
     }
 	/**
@@ -119,26 +131,46 @@ public class App
 	/**
 	 * 
 	 */
-	public static Certificado createCertificate() throws CertIOException, OperatorCreationException, GeneralSecurityException
+	public static KeyPair createKeyPair() throws NoSuchAlgorithmException, NoSuchProviderException
 	{
-		System.out.println("INIT KEY PAR");
-		KeyPairGenerator kpGen = KeyPairGenerator.getInstance("RSA", "BCFIPS");
-		kpGen.initialize(2048);
+		System.out.println("INIT KEY PAR \"" + algorithm + "\"");
+		KeyPairGenerator kpGen = KeyPairGenerator.getInstance(algorithm, "BCFIPS");
+		if ("RSA".equals(algorithm)) {
+			kpGen.initialize(RSA_SIZE);	
+		}
+		else
+		if ("EC".equals(algorithm)) {
+			kpGen.initialize(EC_SIZE);
+		}
+		else {
+			throw new NoSuchAlgorithmException(algorithm);
+		}		
 		System.out.println("GEN KEY PAR");
 		KeyPair kp = kpGen.generateKeyPair();
-		System.out.println("MAKE CERT");
-		X509Certificate cert = Utils.makeV3Certificate(kp.getPrivate(), kp.getPublic());
-		return new Certificado(cert,kp.getPrivate());
+		return kp;
 	}
 	/**
 	 * 
 	 */
-	public static String createCSR(Certificado certificado) throws OperatorCreationException, GeneralSecurityException, IOException 
+	public static String createCSR(KeyPair keyPair ) throws OperatorCreationException, GeneralSecurityException, IOException 
 	{
 		System.out.println("CREATE CSR");
-		PKCS10CertificationRequest csr = Utils.createPkcs10Request(certificado.getKey(), certificado.getCert());
-		String pkcs10 = new String(Base64.getEncoder().encode(csr.getEncoded()));
-		return pkcs10;
+		if ("RSA".equals(algorithm)) 
+		{
+			PKCS10CertificationRequest csr = Utils.createPkcs10Request(Utils.SIGNATURE_ALGORITHM_RSA,keyPair);
+			String pkcs10 = new String(Base64.getEncoder().encode(csr.getEncoded()));
+			return pkcs10;
+		}
+		else
+		if ("EC".equals(algorithm)) 
+		{
+			PKCS10CertificationRequest csr = Utils.createPkcs10Request(Utils.SIGNATURE_ALGORITHM_EC,keyPair);
+			String pkcs10 = new String(Base64.getEncoder().encode(csr.getEncoded()));
+			return pkcs10;
+		}
+		else {
+			throw new NoSuchAlgorithmException(algorithm);
+		}
 	}
 	/**
 	 * 
@@ -194,7 +226,7 @@ public class App
 	/**
 	 * 
 	 */
-	public static void saveCertificate(Certificado cert, List<X509Certificate> xchain) throws KeyStoreException, NoSuchProviderException, NoSuchAlgorithmException, CertificateException, IOException, UnrecoverableKeyException
+	public static void saveCertificate(PrivateKey key, List<X509Certificate> xchain) throws KeyStoreException, NoSuchProviderException, NoSuchAlgorithmException, CertificateException, IOException, UnrecoverableKeyException
 	{
 		KeyStore keyStore = KeyStore.getInstance("BCFKS", "BCFIPS");
 		File fileKeystore = new File("keystore.bks");
@@ -202,9 +234,9 @@ public class App
 		keyStore.load(fileKeyStore, password);		
 		Certificate chain [] = new Certificate[xchain.size()];
 		chain = (Certificate[]) xchain.toArray(chain);
-		keyStore.setKeyEntry(alias, cert.getKey(), password, chain);
+		keyStore.setKeyEntry(alias, key, password, chain);
 		FileOutputStream fos = new FileOutputStream("keystore.bks");
 		System.out.println("SAVE KEYSTORE END");
 		keyStore.store(fos, password);
-	}
+	}	
 }
